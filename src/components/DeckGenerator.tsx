@@ -155,7 +155,29 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
     }
   };
 
-  // ... rest of the JSX and component rendering remains unchanged
+  if (deckGenerated && downloadUrl) {
+    return (
+      <div>
+        <p>Your deck is ready!</p>
+        <Button onClick={handleDownload}>Download Deck</Button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <form onSubmit={handleSubmit}>
+        <Input
+          placeholder="Company Name"
+          value={formData.companyName}
+          onChange={(e) => setFormData(prev => ({ ...prev, companyName: e.target.value }))}
+        />
+        <Button type="submit" disabled={isGenerating}>
+          {isGenerating ? "Generating..." : "Create Deck"}
+        </Button>
+      </form>
+    </div>
+  );
 };
 
 export default DeckGenerator;
