@@ -6,8 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowUp, Upload, FileText, Download } from "lucide-react";
+import { ArrowUp, Upload, FileText, Download, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiService, fileToBase64, downloadFile, GenerateDeckResponse } from "@/services/api";
 
 interface DeckGeneratorProps {
   onBack: () => void;
@@ -34,7 +35,8 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
     exportFormat: "powerpoint"
   });
   const [isGenerating, setIsGenerating] = useState(false);
-  const [deckGenerated, setDeckGenerated] = useState(false);
+  const [generatedDeck, setGeneratedDeck] = useState<GenerateDeckResponse | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const industries = [
     "Technology/Software",
@@ -83,6 +85,26 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
   const handleLogoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      // Check file size (5MB limit)
+      if (file.size > 5 * 1024 * 1024) {
+        toast({
+          title: "File Too Large",
+          description: "Please select a logo file smaller than 5MB.",
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      // Check file type
+      if (!file.type.startsWith('image/')) {
+        toast({
+          title: "Invalid File Type",
+          description: "Please select an image file (PNG, JPG, etc.).",
+          variant: "destructive"
+        });
+        return;
+      }
+      
       setFormData(prev => ({ ...prev, logo: file }));
     }
   };
@@ -99,20 +121,48 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
       return;
     }
 
+    if (formData.buyerPersona.length === 0) {
+      toast({
+        title: "Missing Buyer Persona",
+        description: "Please select at least one target buyer persona.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     setIsGenerating(true);
     
-    // Simulate AI generation process
     try {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      setDeckGenerated(true);
+      // Convert logo to base64 if provided
+      let logoBase64 = undefined;
+      if (formData.logo) {
+        logoBase64 = await fileToBase64(formData.logo);
+      }
+
+      // Prepare API request
+      const request = {
+        company_name: formData.companyName,
+        industry: formData.industry,
+        buyer_persona: formData.buyerPersona.join(", "),
+        main_pain_point: formData.mainPainPoint || "Inefficient processes and lack of automation",
+        use_case: formData.useCase,
+        logo_base64: logoBase64
+      };
+
+      // Call API
+      const response = await apiService.generateDeck(request);
+      
+      setGeneratedDeck(response);
       toast({
         title: "Deck Generated Successfully!",
-        description: "Your personalized sales deck is ready for download.",
+        description: `Your personalized sales deck with ${response.slides_generated} slides is ready for download.`,
       });
+      
     } catch (error) {
+      console.error('Error generating deck:', error);
       toast({
         title: "Generation Failed",
-        description: "There was an error generating your deck. Please try again.",
+        description: error instanceof Error ? error.message : "There was an error generating your deck. Please try again.",
         variant: "destructive"
       });
     } finally {
@@ -120,15 +170,48 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
     }
   };
 
-  const handleDownload = () => {
-    // Simulate download
-    toast({
-      title: "Download Started",
-      description: "Your deck is being downloaded as a PowerPoint file.",
+  const handleDownload = async () => {
+    if (!generatedDeck) return;
+
+    setIsDownloading(true);
+    
+    try {
+      const blob = await apiService.downloadDeck(generatedDeck.file_id);
+      downloadFile(blob, generatedDeck.filename);
+      
+      toast({
+        title: "Download Started",
+        description: "Your deck is being downloaded as a PowerPoint file.",
+      });
+    } catch (error) {
+      console.error('Error downloading deck:', error);
+      toast({
+        title: "Download Failed",
+        description: error instanceof Error ? error.message : "There was an error downloading your deck. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  const resetForm = () => {
+    setGeneratedDeck(null);
+    setFormData({
+      companyName: "",
+      industry: "",
+      buyerPersona: [],
+      mainPainPoint: "",
+      useCase: "",
+      exportFormat: "powerpoint"
     });
   };
 
-  if (deckGenerated) {
+  if (generatedDeck) {
+    const expiresAt = new Date(generatedDeck.expires_at);
+    const now = new Date();
+    const isExpired = now > expiresAt;
+
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 p-4">
         <div className="container mx-auto max-w-4xl py-12">
@@ -146,46 +229,49 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
             </CardHeader>
             <CardContent className="text-center space-y-6">
               <div className="bg-gray-50 rounded-lg p-6">
-                <h3 className="font-semibold text-lg mb-4">Deck Contents:</h3>
+                <h3 className="font-semibold text-lg mb-4">Deck Details:</h3>
                 <div className="grid md:grid-cols-2 gap-4 text-left">
                   <div className="space-y-2">
-                    <p className="text-sm text-gray-600">• Company Overview</p>
-                    <p className="text-sm text-gray-600">• Problem Statement</p>
-                    <p className="text-sm text-gray-600">• Solution Overview</p>
-                    <p className="text-sm text-gray-600">• Value Proposition</p>
-                    <p className="text-sm text-gray-600">• ROI Analysis</p>
+                    <p className="text-sm text-gray-600">📄 <strong>Filename:</strong> {generatedDeck.filename}</p>
+                    <p className="text-sm text-gray-600">📊 <strong>Slides:</strong> {generatedDeck.slides_generated}</p>
+                    <p className="text-sm text-gray-600">🎯 <strong>Industry:</strong> {formData.industry}</p>
                   </div>
                   <div className="space-y-2">
-                    <p className="text-sm text-gray-600">• Case Studies</p>
-                    <p className="text-sm text-gray-600">• Implementation Timeline</p>
-                    <p className="text-sm text-gray-600">• Pricing Options</p>
-                    <p className="text-sm text-gray-600">• Next Steps</p>
-                    <p className="text-sm text-gray-600">• Q&A Section</p>
+                    <p className="text-sm text-gray-600">👥 <strong>Target:</strong> {formData.buyerPersona.join(", ")}</p>
+                    <p className="text-sm text-gray-600">📋 <strong>Use Case:</strong> {formData.useCase}</p>
+                    <p className="text-sm text-gray-600">⏰ <strong>Expires:</strong> {expiresAt.toLocaleString()}</p>
                   </div>
                 </div>
               </div>
+
+              {isExpired && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center space-x-2">
+                  <AlertCircle className="w-5 h-5 text-red-500" />
+                  <p className="text-red-700">This download link has expired. Please generate a new deck.</p>
+                </div>
+              )}
               
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Button
                   onClick={handleDownload}
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-3 text-lg rounded-lg transition-all duration-300 transform hover:scale-105 shadow-lg"
+                  disabled={isDownloading || isExpired}
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-3 text-lg rounded-lg transition-all duration-300 transform hover:scale-105 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                 >
-                  <Download className="w-5 h-5 mr-2" />
-                  Download PowerPoint
+                  {isDownloading ? (
+                    <div className="flex items-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Downloading...
+                    </div>
+                  ) : (
+                    <>
+                      <Download className="w-5 h-5 mr-2" />
+                      Download PowerPoint
+                    </>
+                  )}
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setDeckGenerated(false);
-                    setFormData({
-                      companyName: "",
-                      industry: "",
-                      buyerPersona: [],
-                      mainPainPoint: "",
-                      useCase: "",
-                      exportFormat: "powerpoint"
-                    });
-                  }}
+                  onClick={resetForm}
                   className="px-8 py-3 text-lg border-2 border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition-all duration-300"
                 >
                   Create Another Deck
@@ -276,7 +362,7 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
               {/* Buyer Persona */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium text-gray-700">
-                  Target Buyer Persona (select all that apply)
+                  Target Buyer Persona (select all that apply) *
                 </Label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   {personas.map((persona) => (
@@ -377,7 +463,7 @@ const DeckGenerator = ({ onBack }: DeckGeneratorProps) => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="powerpoint">PowerPoint (.pptx)</SelectItem>
-                    <SelectItem value="googleslides">Google Slides</SelectItem>
+                    <SelectItem value="googleslides">Google Slides (Coming Soon)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
